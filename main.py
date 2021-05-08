@@ -4,13 +4,16 @@ import argparse
 import cv2
 import numpy as np
 from enum import Enum
+from pathlib import Path
 
 
-class ObjectIdentifier:
+class VideoFeatureMatcher:
     """
-    Object detector using ORB feature detector and FLANN or BF matchers.
+    Feature matcher using ORB feature detector and FLANN or BF matchers to
+    identify an object on the video.
     """
 
+    BEST_KEYPOINTS_LIMIT = 100
     FLANN_INDEX_LSH = 6
 
     class Matcher(Enum):
@@ -19,9 +22,9 @@ class ObjectIdentifier:
 
     def __init__(self, matcher: Matcher):
         self.feature_detector = cv2.ORB_create()
-        self.image = None
-        self.key_points = None
-        self.descriptors = None
+        self.images = []
+        self.key_points = []
+        self.descriptors = []
 
         if matcher == self.Matcher.BRUTE_FORCE:
             self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
@@ -37,21 +40,68 @@ class ObjectIdentifier:
             }
             self.matcher = cv2.FlannBasedMatcher(index_params, search_params)
         else:
-            raise AttributeError('Unknown matcher type.')
+            raise ValueError('Unknown matcher type.')
 
-    def detect(self, image_path):
-        image = cv2.imread(image_path)
-        if image is None:
-            raise AttributeError('Invalid image path.')
+    def detect(self, image_path, verbose=False):
+        """
+        Detect key points on images from a specified directory.
 
-        self.image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        self.key_points, self.descriptors = \
-            self.feature_detector.detectAndCompute(self.image, None)
+        :param image_path: A path to directory with JPG files
+        :param verbose:  If true, display each image with its key points
+                         in a separate window.
+        :return: None
+        """
+
+        # Load images from path
+        path = Path(image_path)
+        filenames = path.glob('*.jpg')
+        for f in filenames:
+            image = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+            if image is not None:
+                self.images.append(image)
+        if len(self.images) == 0:
+            raise AttributeError('Couldn\'t read any images from the '
+                                 f'{path} dir.')
+
+        key_points_list = []
+        descriptors_list = []
+        for image in self.images:
+            # Define a mask – strip 12.5% of image from top and bottom
+            mask = np.zeros(image.shape)
+            mask[int(mask.shape[0] / 8):int(mask.shape[0] * 7 / 8), :] = 1
+            mask = mask.astype(np.uint8)
+
+            # Detect and compute features and add them to a unified list
+            key_points, descriptors = \
+                self.feature_detector.detectAndCompute(image, mask)
+            key_points_list.extend(key_points)
+            descriptors_list.extend(descriptors)
+
+            # If true, show images with their key points in separate windows
+            if verbose:
+                kp_image = cv2.drawKeypoints(image, key_points, None)
+                cv2.imshow("Image preview (press any key to quit)", kp_image)
+                cv2.waitKey(0)
+
+        cv2.destroyAllWindows()
+        self.key_points = np.array(key_points_list)
+        self.descriptors = np.array(descriptors_list)
 
     def process(self, stream_path):
+        """
+        Display a video stream and identify a previously detected object.
+
+        :param stream_path: A path to a video file to process.
+        :return: None
+        """
+
+        if len(self.key_points) == 0:
+            raise RuntimeError('Feature detector is not trained. Run detect() '
+                               'first.')
+
         video = cv2.VideoCapture(stream_path)
         if not video.isOpened():
-            raise AttributeError('Invalid video stream path.')
+            raise RuntimeError(f'Cannot open {stream_path} video file.')
 
         while video.isOpened():
             is_read, frame = video.read()
@@ -62,11 +112,11 @@ class ObjectIdentifier:
             vid_key_points, vid_descriptors = \
                 self.feature_detector.detectAndCompute(frame, None)
 
-            matches = self.matcher.match(self.descriptors, vid_descriptors)
+            matches = self.matcher.match(self.descriptors,
+                                         vid_descriptors)
 
-            # TODO(mdziewulski): change to ratio-based
             matches = sorted(matches, key=lambda x: x.distance)
-            good_matches = matches[:30]
+            good_matches = matches[:self.BEST_KEYPOINTS_LIMIT]
 
             src_points = np.float32(
                 [self.key_points[m.queryIdx].pt for m in good_matches]
@@ -80,7 +130,7 @@ class ObjectIdentifier:
                 src_points, dst_points, cv2.RANSAC, 5.0)
 
             matches_mask = mask.ravel().tolist()
-            h, w = self.image.shape[:2]
+            h, w = self.images[0].shape[:2]
             pts = np.float32(
                 [[0, 0],
                  [0, h - 1],
@@ -98,7 +148,7 @@ class ObjectIdentifier:
                 'flags': 2,
             }
             img = cv2.drawMatches(
-                self.image,
+                self.images[0],
                 self.key_points,
                 frame,
                 vid_key_points,
@@ -114,6 +164,8 @@ class ObjectIdentifier:
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
+        cv2.destroyAllWindows()
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='This program tracks object '
@@ -123,21 +175,26 @@ def parse_arguments():
                         choices=['brute_force', 'flann'],
                         default='brute_force',
                         help='Matcher used object tracking.')
-    parser.add_argument('-i', '--image',
+    parser.add_argument('-i', '--images',
                         required=True,
-                        help='Path to the image with an object to track.'
+                        help='Path to the images directory with an object to '
+                             'track. Script reads all *.jpg files from that '
+                             'directory.'
                         )
     parser.add_argument('-s', '--stream',
                         required=True,
                         help='Path to the video stream.')
+    parser.add_argument('-v', '--verbose',
+                        action='store_true',
+                        help='Display images with their feature points.')
     return parser.parse_args()
 
 
 def main(args):
-    identifier = ObjectIdentifier(
-        matcher=ObjectIdentifier.Matcher[args.matcher.upper()])
-    identifier.detect(args.image)
-    identifier.process(args.stream)
+    matcher = VideoFeatureMatcher(
+        matcher=VideoFeatureMatcher.Matcher[args.matcher.upper()])
+    matcher.detect(args.images, args.verbose)
+    matcher.process(args.stream)
 
 
 if __name__ == '__main__':
