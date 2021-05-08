@@ -13,7 +13,7 @@ class VideoFeatureMatcher:
     identify an object on the video.
     """
 
-    BEST_KEYPOINTS_LIMIT = 100
+    BEST_KEYPOINTS_LIMIT = 150
     FLANN_INDEX_LSH = 6
 
     class Matcher(Enum):
@@ -173,7 +173,7 @@ def parse_arguments():
                                                  'specified video stream.')
     parser.add_argument('-m', '--matcher',
                         choices=['brute_force', 'flann'],
-                        default='brute_force',
+                        default='flann',
                         help='Matcher used object tracking.')
     parser.add_argument('-i', '--images',
                         required=True,
