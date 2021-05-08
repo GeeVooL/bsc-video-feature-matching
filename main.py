@@ -36,7 +36,7 @@ class VideoFeatureMatcher:
                 'multi_probe_level': 1,
             }
             search_params = {
-                'checks': 50,
+                'checks': 100,
             }
             self.matcher = cv2.FlannBasedMatcher(index_params, search_params)
         else:
