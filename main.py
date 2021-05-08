@@ -95,29 +95,34 @@ class VideoFeatureMatcher:
         :return: None
         """
 
+        # Check whether detect() was called
         if len(self.key_points) == 0:
             raise RuntimeError('Feature detector is not trained. Run detect() '
                                'first.')
 
+        # Open video stream
         video = cv2.VideoCapture(stream_path)
         if not video.isOpened():
             raise RuntimeError(f'Cannot open {stream_path} video file.')
 
+        # Iterate over video's frames
         while video.isOpened():
             is_read, frame = video.read()
             if not is_read:
                 break
 
+            # Calculate key points for a frame
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             vid_key_points, vid_descriptors = \
                 self.feature_detector.detectAndCompute(frame, None)
 
+            # Match points from the images to the points on the frame
             matches = self.matcher.match(self.descriptors,
                                          vid_descriptors)
-
             matches = sorted(matches, key=lambda x: x.distance)
             good_matches = matches[:self.BEST_KEYPOINTS_LIMIT]
 
+            # Find homography between pictures and show the result
             src_points = np.float32(
                 [self.key_points[m.queryIdx].pt for m in good_matches]
             ).reshape(-1, 1, 2)
@@ -148,7 +153,7 @@ class VideoFeatureMatcher:
                 'flags': 2,
             }
             img = cv2.drawMatches(
-                self.images[0],
+                self.images[0],  # The first picture is displayed by default
                 self.key_points,
                 frame,
                 vid_key_points,
